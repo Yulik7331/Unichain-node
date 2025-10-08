@@ -232,31 +232,97 @@ configure_rpc() {
 configure_network() {
     local NETWORK=$1
     cd "$INSTALL_DIR"
-    
+
     print_info "Настройка docker-compose.yml для сети: $NETWORK..."
-    
-    # Редактируем docker-compose.yml вручную через nano
-    print_warning "Необходимо вручную отредактировать docker-compose.yml"
-    echo ""
-    print_info "Инструкция:"
-    print_info "1. Найдите секцию 'execution-client:' и 'env_file:'"
-    print_info "2. Раскомментируйте (уберите #) перед нужной сетью:"
-    
-    if [ "$NETWORK" == "mainnet" ]; then
-        print_info "   - .env.mainnet  (раскомментируйте эту строку)"
-        print_info "   # - .env.sepolia  (закомментируйте эту строку)"
-    else
-        print_info "   - .env.sepolia  (раскомментируйте эту строку)"
-        print_info "   # - .env.mainnet  (закомментируйте эту строку)"
+
+    if [ ! -f "docker-compose.yml" ]; then
+        print_error "Файл docker-compose.yml не найден"
+        return 1
     fi
-    
-    print_info "3. То же самое для секции 'op-node:' и 'env_file:'"
-    print_info "4. Сохраните: Ctrl+X, затем Y, затем Enter"
-    echo ""
-    
-    read -p "Нажмите Enter чтобы открыть редактор..."
-    nano docker-compose.yml
-    
+
+    local ENABLE_ENV DISABLE_ENV
+
+    if [ "$NETWORK" == "mainnet" ]; then
+        ENABLE_ENV=".env.mainnet"
+        DISABLE_ENV=".env.sepolia"
+    else
+        ENABLE_ENV=".env.sepolia"
+        DISABLE_ENV=".env.mainnet"
+    fi
+
+    ENABLE_ENV="$ENABLE_ENV" DISABLE_ENV="$DISABLE_ENV" python3 <<'PY'
+import os
+import pathlib
+import sys
+
+path = pathlib.Path("docker-compose.yml")
+text = path.read_text().splitlines()
+
+try:
+    enable_env = os.environ["ENABLE_ENV"]
+    disable_env = os.environ["DISABLE_ENV"]
+except KeyError as exc:
+    sys.stderr.write(f"Отсутствует переменная окружения: {exc.args[0]}\n")
+    sys.exit(1)
+
+changed = False
+found_enable = False
+found_disable = False
+
+def adjust(line, target, enable):
+    stripped = line.lstrip()
+    if not stripped.startswith(('-', '#')):
+        return line, False, False
+
+    temp = stripped
+    if temp.startswith('#'):
+        temp = temp[1:].lstrip()
+
+    if not temp.startswith('- '):
+        return line, False, False
+
+    value = temp[2:].strip()
+    if value != target:
+        return line, False, False
+
+    indent = line[: len(line) - len(line.lstrip())]
+    new_line = f"{indent}- {target}" if enable else f"{indent}# - {target}"
+    return new_line, True, new_line != line
+
+new_lines = []
+for line in text:
+    updated_line, is_target, did_change = adjust(line, enable_env, True)
+    if is_target:
+        found_enable = True
+    else:
+        updated_line, is_target, did_change = adjust(line, disable_env, False)
+        if is_target:
+            found_disable = True
+
+    if did_change:
+        changed = True
+
+    new_lines.append(updated_line)
+
+if not found_enable or not found_disable:
+    sys.stderr.write(
+        "Не удалось найти все env_file записи для обновления. Проверьте docker-compose.yml.\n"
+    )
+    sys.exit(1)
+
+if changed:
+    path.write_text("\n".join(new_lines) + "\n")
+PY
+
+    if [ $? -ne 0 ]; then
+        print_error "Не удалось обновить docker-compose.yml"
+        return 1
+    fi
+
+    print_success "docker-compose.yml обновлен автоматически"
+    print_info "Активирован env_file: $ENABLE_ENV"
+    print_info "Отключен env_file: $DISABLE_ENV"
+
     # Проверка конфигурации
     if docker-compose config > /dev/null 2>&1; then
         print_success "Конфигурация валидна!"
