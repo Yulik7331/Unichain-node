@@ -33,7 +33,7 @@
 ### 1. Скачайте скрипт
 
 ```bash
-wget https://your-url/unichain_setup.sh
+wget https://github.com/Yulik7331/Unichain-node/blob/main/unichain.sh
 # или создайте вручную:
 nano unichain_setup.sh
 ```
